@@ -15,7 +15,7 @@ def home():
 def chat(prompt: str = "Ola"):
     try:
         response = client.models.generate_content(
-            model="gemini-2.5-flash",
+            model="gemini-3.8-flash",
             contents=prompt
         )
         return {"resposta": response.text}
