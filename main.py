@@ -11,38 +11,86 @@ app = FastAPI()
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# Instruções de Sistema do Isaac
+# Armazenamento em memória do histórico por utilizador { chat_id: [ {role, text} ] }
+conversation_history = {}
+
+# Limite do histórico (últimas 10 trocas de mensagens para manter o servidor leve)
+MAX_HISTORY_TURNS = 10 
+
 SYSTEM_INSTRUCTION = """
 Tu és o Isaac, um assistente virtual de elite focado em apoio técnico, robótica, automação e organização profissional.
 Responda sempre de forma clara, objetiva, prestativa e profissional.
+Mantém o contexto das mensagens anteriores da conversa para responder de forma contínua.
 """
 
-# Lista de modelos em ordem de preferência (com reserva caso haja sobrecarga 503)
 MODELS_TO_TRY = ["gemini-3.8-flash", "gemini-flash-latest"]
 
 # =====================================================================
-# NÚCLEO CENTRAL DE IA (Com Fallback e Tratamento de Erros)
+# GESTÃO DE MEMÓRIA E HISTÓRICO
 # =====================================================================
-def process_with_isaac(prompt: str) -> str:
+def format_history_for_gemini(chat_id: int, new_prompt: str):
+    """Constrói a estrutura de mensagens do histórico para a API do Gemini."""
+    history = conversation_history.get(chat_id, [])
+    contents = []
+    
+    for item in history:
+        contents.append(
+            types.Content(
+                role=item["role"],
+                parts=[types.Part.from_text(text=item["text"])]
+            )
+        )
+    
+    # Adiciona a mensagem atual
+    contents.append(
+        types.Content(
+            role="user",
+            parts=[types.Part.from_text(text=new_prompt)]
+        )
+    )
+    return contents
+
+def save_to_history(chat_id: int, user_text: str, bot_text: str):
+    """Guarda a interação no histórico do chat_id."""
+    if chat_id not in conversation_history:
+        conversation_history[chat_id] = []
+    
+    conversation_history[chat_id].append({"role": "user", "text": user_text})
+    conversation_history[chat_id].append({"role": "model", "text": bot_text})
+    
+    # Limita o tamanho da memória
+    if len(conversation_history[chat_id]) > MAX_HISTORY_TURNS * 2:
+        conversation_history[chat_id] = conversation_history[chat_id][-(MAX_HISTORY_TURNS * 2):]
+
+def clear_history(chat_id: int):
+    """Limpa a memória da conversa do utilizador."""
+    if chat_id in conversation_history:
+        conversation_history[chat_id] = []
+
+
+# =====================================================================
+# NÚCLEO CENTRAL DE IA (Com Memória)
+# =====================================================================
+def process_with_isaac(chat_id: int, prompt: str) -> str:
+    contents = format_history_for_gemini(chat_id, prompt)
+    
     for model_name in MODELS_TO_TRY:
         for attempt in range(2):
             try:
                 response = client.models.generate_content(
                     model=model_name,
-                    contents=prompt,
+                    contents=contents,
                     config=types.GenerateContentConfig(
                         system_instruction=SYSTEM_INSTRUCTION
                     )
                 )
                 if response.text:
+                    save_to_history(chat_id, prompt, response.text)
                     return response.text
             except Exception as e:
-                error_str = str(e)
-                # Se for erro 503 (sobrecarga), aguarda 1s e tenta novamente
-                if "503" in error_str:
+                if "503" in str(e):
                     time.sleep(1)
                     continue
-                # Se o modelo falhar por outro motivo, passa para o próximo modelo da lista
                 break
 
     return "O Isaac está temporariamente indisponível devido a alta demanda nos servidores da Google. Por favor, tente novamente em alguns instantes."
@@ -61,18 +109,32 @@ async def telegram_webhook(request: Request):
     
     if "message" in data and "text" in data["message"]:
         chat_id = data["message"]["chat"]["id"]
-        user_message = data["message"]["text"]
+        user_message = data["message"]["text"].strip()
         
-        # Processa a resposta usando o sistema de fallback
-        reply = process_with_isaac(user_message)
+        # --- COMANDOS DO TELEGRAM ---
+        if user_message == "/start":
+            clear_history(chat_id)
+            reply = (
+                "👋 **Olá! Eu sou o Isaac.**\n\n"
+                "Estou pronto para ajudar em robótica, automação, programação e organização de projetos.\n\n"
+                "💡 **Dica:** Agora eu lembro-me do contexto das nossas conversas! "
+                "Para reiniciar o assunto e apagar a minha memória, envie `/limpar`."
+            )
+        elif user_message in ["/limpar", "/reset"]:
+            clear_history(chat_id)
+            reply = "🧹 **Memória limpa com sucesso!** Podemos começar um novo assunto do zero."
+        else:
+            # Processa mensagem normal com histórico de conversa
+            reply = process_with_isaac(chat_id, user_message)
         
-        # Envia a resposta no Telegram
+        # Envia a resposta de volta ao Telegram
         if TELEGRAM_BOT_TOKEN:
             telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             async with httpx.AsyncClient() as http_client:
                 await http_client.post(telegram_url, json={
                     "chat_id": chat_id,
-                    "text": reply
+                    "text": reply,
+                    "parse_mode": "Markdown"
                 })
                 
     return {"status": "ok"}
