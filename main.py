@@ -58,7 +58,7 @@ async def process_with_isaac(chat_id: int, prompt: str) -> str:
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "llama-3.3-70b-versatile",
+        "model": "llama-3.1-8b-instant",
         "messages": messages,
         "temperature": 0.7
     }
