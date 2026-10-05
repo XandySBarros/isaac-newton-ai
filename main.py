@@ -51,22 +51,26 @@ def web_chat(prompt: str = "Ola"):
 @app.post("/telegram/webhook")
 async def telegram_webhook(request: Request):
     data = await request.json()
+    print(f"--> [WEBHOOK RECEBIDO]: {data}")
     
-    # Processa mensagens de texto recebidas
     if "message" in data and "text" in data["message"]:
         chat_id = data["message"]["chat"]["id"]
         user_message = data["message"]["text"]
         
-        # Gera resposta pelo núcleo de IA
+        # Gera resposta
         reply = process_with_isaac(user_message)
+        print(f"--> [ISAAC RESPOSTA]: {reply}")
         
-        # Envia a resposta de volta ao usuário no Telegram
-        if TELEGRAM_BOT_TOKEN:
+        # Verifica Token
+        if not TELEGRAM_BOT_TOKEN:
+            print("--> [ERRO CRÍTICO]: TELEGRAM_BOT_TOKEN não foi encontrado nas variáveis do Render!")
+        else:
             telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             async with httpx.AsyncClient() as http_client:
-                await http_client.post(telegram_url, json={
+                res = await http_client.post(telegram_url, json={
                     "chat_id": chat_id,
                     "text": reply
                 })
+                print(f"--> [ENVIO TELEGRAM]: Código {res.status_code} - {res.text}")
                 
     return {"status": "ok"}
