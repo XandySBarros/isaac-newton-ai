@@ -17,29 +17,35 @@ Tu és o Isaac, um assistente virtual de elite focado em apoio técnico, robóti
 Responda sempre de forma clara, objetiva, prestativa e profissional.
 """
 
+# Lista de modelos em ordem de preferência (com reserva caso haja sobrecarga 503)
+MODELS_TO_TRY = ["gemini-3.8-flash", "gemini-flash-latest"]
+
 # =====================================================================
-# NÚCLEO CENTRAL DE IA (Com tratamento de erro e retentativa)
+# NÚCLEO CENTRAL DE IA (Com Fallback e Tratamento de Erros)
 # =====================================================================
 def process_with_isaac(prompt: str) -> str:
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            response = client.models.generate_content(
-                model="gemini-3.8-flash",
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    system_instruction=SYSTEM_INSTRUCTION
+    for model_name in MODELS_TO_TRY:
+        for attempt in range(2):
+            try:
+                response = client.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=types.GenerateContentConfig(
+                        system_instruction=SYSTEM_INSTRUCTION
+                    )
                 )
-            )
-            return response.text
-        except Exception as e:
-            # Se for erro de sobrecarga (503) e ainda houver tentativas, aguarda 2s e tenta de novo
-            if "503" in str(e) and attempt < max_retries - 1:
-                time.sleep(2)
-                continue
-            
-            # Se esgotar as tentativas ou for outro erro
-            return "Ocorreu um pico temporário nos servidores do Google. Por favor, envie sua mensagem novamente em alguns instantes."
+                if response.text:
+                    return response.text
+            except Exception as e:
+                error_str = str(e)
+                # Se for erro 503 (sobrecarga), aguarda 1s e tenta novamente
+                if "503" in error_str:
+                    time.sleep(1)
+                    continue
+                # Se o modelo falhar por outro motivo, passa para o próximo modelo da lista
+                break
+
+    return "O Isaac está temporariamente indisponível devido a alta demanda nos servidores da Google. Por favor, tente novamente em alguns instantes."
 
 
 # =====================================================================
@@ -57,10 +63,10 @@ async def telegram_webhook(request: Request):
         chat_id = data["message"]["chat"]["id"]
         user_message = data["message"]["text"]
         
-        # Processa a resposta
+        # Processa a resposta usando o sistema de fallback
         reply = process_with_isaac(user_message)
         
-        # Envia de volta ao Telegram
+        # Envia a resposta no Telegram
         if TELEGRAM_BOT_TOKEN:
             telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
             async with httpx.AsyncClient() as http_client:
