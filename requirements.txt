@@ -1,3 +1,7 @@
 fastapi
 uvicorn
 google-genai
+fastapi
+uvicorn
+google-genai
+httpx
