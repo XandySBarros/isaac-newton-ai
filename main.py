@@ -7,14 +7,12 @@ from google.genai import types
 
 app = FastAPI()
 
-# Inicialização de Clientes
+# Inicialização do cliente Gemini
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-# Armazenamento em memória do histórico por utilizador { chat_id: [ {role, text} ] }
+# Armazenamento do histórico em memória { chat_id: [ {"role": "user"/"model", "text": "..."} ] }
 conversation_history = {}
-
-# Limite do histórico (últimas 10 trocas de mensagens para manter o servidor leve)
 MAX_HISTORY_TURNS = 10 
 
 SYSTEM_INSTRUCTION = """
@@ -23,77 +21,69 @@ Responda sempre de forma clara, objetiva, prestativa e profissional.
 Mantém o contexto das mensagens anteriores da conversa para responder de forma contínua.
 """
 
-MODELS_TO_TRY = ["gemini-3.8-flash", "gemini-flash-latest"]
-
 # =====================================================================
 # GESTÃO DE MEMÓRIA E HISTÓRICO
 # =====================================================================
-def format_history_for_gemini(chat_id: int, new_prompt: str):
-    """Constrói a estrutura de mensagens do histórico para a API do Gemini."""
+def build_gemini_contents(chat_id: int, new_prompt: str):
+    """Constrói o histórico no formato nativo de dicionário aceite pela API do Gemini."""
     history = conversation_history.get(chat_id, [])
     contents = []
     
     for item in history:
-        contents.append(
-            types.Content(
-                role=item["role"],
-                parts=[types.Part.from_text(text=item["text"])]
-            )
-        )
+        contents.append({
+            "role": item["role"],
+            "parts": [{"text": item["text"]}]
+        })
     
-    # Adiciona a mensagem atual
-    contents.append(
-        types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=new_prompt)]
-        )
-    )
+    # Mensagem atual do utilizador
+    contents.append({
+        "role": "user",
+        "parts": [{"text": new_prompt}]
+    })
     return contents
 
 def save_to_history(chat_id: int, user_text: str, bot_text: str):
-    """Guarda a interação no histórico do chat_id."""
     if chat_id not in conversation_history:
         conversation_history[chat_id] = []
     
     conversation_history[chat_id].append({"role": "user", "text": user_text})
     conversation_history[chat_id].append({"role": "model", "text": bot_text})
     
-    # Limita o tamanho da memória
+    # Limita o tamanho do histórico
     if len(conversation_history[chat_id]) > MAX_HISTORY_TURNS * 2:
         conversation_history[chat_id] = conversation_history[chat_id][-(MAX_HISTORY_TURNS * 2):]
 
 def clear_history(chat_id: int):
-    """Limpa a memória da conversa do utilizador."""
     if chat_id in conversation_history:
         conversation_history[chat_id] = []
 
 
 # =====================================================================
-# NÚCLEO CENTRAL DE IA (Com Memória)
+# NÚCLEO CENTRAL DE IA (Com Retentativa e Logs)
 # =====================================================================
 def process_with_isaac(chat_id: int, prompt: str) -> str:
-    contents = format_history_for_gemini(chat_id, prompt)
+    contents = build_gemini_contents(chat_id, prompt)
     
-    for model_name in MODELS_TO_TRY:
-        for attempt in range(2):
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=contents,
-                    config=types.GenerateContentConfig(
-                        system_instruction=SYSTEM_INSTRUCTION
-                    )
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model="gemini-3.8-flash",
+                contents=contents,
+                config=types.GenerateContentConfig(
+                    system_instruction=SYSTEM_INSTRUCTION
                 )
-                if response.text:
-                    save_to_history(chat_id, prompt, response.text)
-                    return response.text
-            except Exception as e:
-                if "503" in str(e):
-                    time.sleep(1)
-                    continue
-                break
+            )
+            if response and response.text:
+                save_to_history(chat_id, prompt, response.text)
+                return response.text
+        except Exception as e:
+            print(f"--> [ERRO GEMINI - Tentativa {attempt + 1}]: {e}")
+            if attempt < max_retries - 1:
+                time.sleep(2)
+                continue
 
-    return "O Isaac está temporariamente indisponível devido a alta demanda nos servidores da Google. Por favor, tente novamente em alguns instantes."
+    return "O Isaac encontrou um pico de tráfego nos servidores da Google. Por favor, envie a sua mensagem novamente em instantes."
 
 
 # =====================================================================
@@ -124,7 +114,6 @@ async def telegram_webhook(request: Request):
             clear_history(chat_id)
             reply = "🧹 **Memória limpa com sucesso!** Podemos começar um novo assunto do zero."
         else:
-            # Processa mensagem normal com histórico de conversa
             reply = process_with_isaac(chat_id, user_message)
         
         # Envia a resposta de volta ao Telegram
