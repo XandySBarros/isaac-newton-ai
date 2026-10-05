@@ -1,98 +1,118 @@
 import os
-import asyncio
-import logging
+import httpx
 from fastapi import FastAPI, Request
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
-from google import genai
-from google.genai import types
 
-# Configuração de Logs
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
-
-# Inicialização do Cliente Gemini SDK Oficial
-client = genai.Client(api_key=GEMINI_API_KEY)
-
-# Instância da App FastAPI
 app = FastAPI()
 
-# Histórico em memória: { chat_id: [ {"role": "user"/"model", "content": "..."}, ... ] }
-chat_history = {}
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
 
-SYSTEM_INSTRUCTION = (
-    "Tu és o Isaac, um assistente virtual inteligente, prestativo, educado e bem-humorado. "
-    "Responde sempre em português de Portugal. "
-    "Trata o utilizador com proximidade e cordialidade. "
-    "Quando fores questionado sobre a tua identidade ou criador, responde de forma simpática "
-    "que foste desenvolvido pelo Alexandre para ajudar no dia a dia."
-)
+# Armazenamento em memória do histórico { chat_id: [ {"role": "user"/"assistant", "content": "..."} ] }
+conversation_history = {}
+MAX_HISTORY_TURNS = 10 
 
-def build_gemini_contents(user_id: int, user_message: str) -> list[types.Content]:
-    """
-    Converte o histórico guardado em memória para a estrutura oficial
-    de objetos types.Content e types.Part do SDK google-genai.
-    """
-    history = chat_history.get(user_id, [])
-    contents = []
+SYSTEM_INSTRUCTION = """
+Tu és o Isaac, um assistente virtual de elite focado em apoio técnico, robótica, automação e organização profissional.
+Responda sempre de forma clara, objetiva, prestativa e profissional.
+"""
 
-    # Adiciona o histórico anterior convertido para objetos types.Content
-    for msg in history:
-        role = "user" if msg["role"] == "user" else "model"
-        contents.append(
-            types.Content(
-                role=role,
-                parts=[types.Part.from_text(text=msg["content"])]
-            )
-        )
-
-    # Adiciona a mensagem atual do utilizador
-    contents.append(
-        types.Content(
-            role="user",
-            parts=[types.Part.from_text(text=user_message)]
-        )
-    )
-    return contents
-
-async def process_with_isaac(user_id: int, user_message: str) -> str:
-    contents = build_gemini_contents(user_id, user_message)
+# =====================================================================
+# GESTÃO DE MEMÓRIA
+# =====================================================================
+def get_messages_payload(chat_id: int, new_prompt: str):
+    messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}]
     
-    config = types.GenerateContentConfig(
-        system_instruction=SYSTEM_INSTRUCTION,
-        temperature=0.7,
-    )
+    # Adiciona histórico anterior
+    history = conversation_history.get(chat_id, [])
+    for msg in history:
+        messages.append(msg)
+        
+    # Adiciona a mensagem atual
+    messages.append({"role": "user", "content": new_prompt})
+    return messages
 
-    for attempt in range(3):
+def save_to_history(chat_id: int, user_text: str, bot_text: str):
+    if chat_id not in conversation_history:
+        conversation_history[chat_id] = []
+    
+    conversation_history[chat_id].append({"role": "user", "content": user_text})
+    conversation_history[chat_id].append({"role": "assistant", "content": bot_text})
+    
+    # Mantém limite de histórico
+    if len(conversation_history[chat_id]) > MAX_HISTORY_TURNS * 2:
+        conversation_history[chat_id] = conversation_history[chat_id][-(MAX_HISTORY_TURNS * 2):]
+
+def clear_history(chat_id: int):
+    if chat_id in conversation_history:
+        conversation_history[chat_id] = []
+
+# =====================================================================
+# PROCESSAMENTO COM GROQ (Llama 3.3)
+# =====================================================================
+async def process_with_isaac(chat_id: int, prompt: str) -> str:
+    messages = get_messages_payload(chat_id, prompt)
+    
+    url = "https://api.groq.com/openai/v1/chat/completions"
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": messages,
+        "temperature": 0.7
+    }
+    
+    async with httpx.AsyncClient() as http_client:
         try:
-            response = client.models.generate_content(
-                model="gemini-2.5-flash",  # Pode utilizar "gemini-2.5-flash" ou "gemini-2.0-flash"
-                contents=contents,
-                config=config,
-            )
-            
-            bot_reply = response.text
-            
-            # Atualiza o histórico na memória após resposta bem-sucedida
-            if user_id not in chat_history:
-                chat_history[user_id] = []
-            
-            chat_history[user_id].append({"role": "user", "content": user_message})
-            chat_history[user_id].append({"role": "model", "content": bot_reply})
-            
-            # Mantém apenas as últimas 20 mensagens (10 turnos de conversa)
-            if len(chat_history[user_id]) > 20:
-                chat_history[user_id] = chat_history[user_id][-20:]
-                
-            return bot_reply
-
+            response = await http_client.post(url, json=payload, headers=headers, timeout=30.0)
+            if response.status_code == 200:
+                data = response.json()
+                bot_reply = data["choices"][0]["message"]["content"]
+                save_to_history(chat_id, prompt, bot_reply)
+                return bot_reply
+            else:
+                print(f"Erro Groq: {response.status_code} - {response.text}")
+                return "Ocorreu um erro na comunicação com a IA. Verifique a chave da Groq."
         except Exception as e:
-            # Imprime o erro detalhado nos Logs do Render
-            logger.error(f"--> [ERRO GEMINI - Tentativa {attempt + 1}]: {e}", exc_info=True)
-            if attempt < 2:
-                await asyncio.sleep(2)
+            print(f"Exceção ao chamar Groq: {e}")
+            return "O Isaac está temporariamente indisponível. Tente novamente em instantes."
 
-    return "O Isaac encontrou um problema técnico ao processar a mensagem. Por favor, tente novamente em instantes."
+# =====================================================================
+# ENDPOINTS
+# =====================================================================
+@app.get("/")
+def home():
+    return {"status": "Isaac está online via Groq!"}
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request):
+    data = await request.json()
+    
+    if "message" in data and "text" in data["message"]:
+        chat_id = data["message"]["chat"]["id"]
+        user_message = data["message"]["text"].strip()
+        
+        if user_message == "/start":
+            clear_history(chat_id)
+            reply = (
+                "👋 **Olá! Eu sou o Isaac.**\n\n"
+                "Estou pronto para ajudar em robótica, automação, programação e organização de projetos.\n\n"
+                "💡 **Dica:** Para reiniciar a nossa conversa e limpar a memória, envie `/limpar`."
+            )
+        elif user_message in ["/limpar", "/reset"]:
+            clear_history(chat_id)
+            reply = "🧹 **Memória limpa com sucesso!** Podemos começar um novo assunto do zero."
+        else:
+            reply = await process_with_isaac(chat_id, user_message)
+        
+        if TELEGRAM_BOT_TOKEN:
+            telegram_url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            async with httpx.AsyncClient() as http_client:
+                await http_client.post(telegram_url, json={
+                    "chat_id": chat_id,
+                    "text": reply,
+                    "parse_mode": "Markdown"
+                })
+                
+    return {"status": "ok"}
