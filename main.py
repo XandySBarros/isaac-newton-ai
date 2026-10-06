@@ -4,8 +4,9 @@ from fastapi import FastAPI, Request
 
 app = FastAPI()
 
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY")
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN")
+# O .strip() remove automaticamente espaços em branco indesejados da chave
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "").strip()
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()
 
 conversation_history = {}
 MAX_HISTORY_TURNS = 10 
@@ -26,7 +27,7 @@ def get_messages_payload(chat_id: int, new_prompt: str):
 def save_to_history(chat_id: int, user_text: str, bot_text: str):
     if chat_id not in conversation_history:
         conversation_history[chat_id] = []
-    conversation_history[chat_id].append({"role": "user", "text": user_text})
+    conversation_history[chat_id].append({"role": "user", "content": user_text})
     conversation_history[chat_id].append({"role": "assistant", "content": bot_text})
     if len(conversation_history[chat_id]) > MAX_HISTORY_TURNS * 2:
         conversation_history[chat_id] = conversation_history[chat_id][-(MAX_HISTORY_TURNS * 2):]
@@ -43,7 +44,7 @@ async def process_with_isaac(chat_id: int, prompt: str) -> str:
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": "llama-3.3-70b-versatile",
         "messages": messages,
         "temperature": 0.7
     }
