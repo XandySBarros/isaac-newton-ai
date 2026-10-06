@@ -43,7 +43,7 @@ async def process_with_isaac(chat_id: int, prompt: str) -> str:
         "Content-Type": "application/json"
     }
     payload = {
-        "model": "llama3-8b-8192",
+        "model": "llama-3.1-8b-instant",
         "messages": messages,
         "temperature": 0.7
     }
@@ -58,7 +58,7 @@ async def process_with_isaac(chat_id: int, prompt: str) -> str:
                 return bot_reply
             else:
                 print(f"Erro Groq: {response.status_code} - {response.text}")
-                return f"Erro Groq {response.status_code}. Verifique a chave GROQ_API_KEY no Render."
+                return f"Erro Groq {response.status_code}. Verifique as configurações no Render."
         except Exception as e:
             print(f"Exceção ao chamar Groq: {e}")
             return "O Isaac está temporariamente indisponível. Tente novamente em instantes."
