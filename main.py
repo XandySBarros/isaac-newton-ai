@@ -39,22 +39,27 @@ def clear_history(chat_id: int):
         conversation_history[chat_id] = []
 
 async def process_with_isaac(chat_id: int, prompt: str) -> str:
+    if not GEMINI_API_KEY:
+        return "Erro: A chave GEMINI_API_KEY não foi configurada no Render."
+
     contents = get_gemini_contents(chat_id, prompt)
     url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
     
     payload = {
-        "system_instruction": {
+        "contents": contents,
+        "systemInstruction": {
             "parts": [{"text": SYSTEM_INSTRUCTION}]
         },
-        "contents": contents,
         "generationConfig": {
             "temperature": 0.7
         }
     }
     
+    headers = {"Content-Type": "application/json"}
+    
     async with httpx.AsyncClient() as http_client:
         try:
-            response = await http_client.post(url, json=payload, timeout=30.0)
+            response = await http_client.post(url, json=payload, headers=headers, timeout=30.0)
             if response.status_code == 200:
                 data = response.json()
                 bot_reply = data["candidates"][0]["content"]["parts"][0]["text"]
@@ -62,10 +67,11 @@ async def process_with_isaac(chat_id: int, prompt: str) -> str:
                 return bot_reply
             else:
                 print(f"Erro Gemini: {response.status_code} - {response.text}")
-                return f"Erro Gemini {response.status_code}. Verifica a chave no Render."
+                err_msg = response.json().get('error', {}).get('message', 'Erro desconhecido')
+                return f"Erro Gemini {response.status_code}: {err_msg}"
         except Exception as e:
             print(f"Exceção ao chamar Gemini: {e}")
-            return "O Isaac está temporariamente indisponível. Tenta novamente em instantes."
+            return "O Isaac está temporariamente indisponível. Tente novamente em instantes."
 
 @app.get("/")
 def home():
