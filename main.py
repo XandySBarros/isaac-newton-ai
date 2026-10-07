@@ -226,16 +226,31 @@ async def send_telegram_message(chat_id: int, text: str) -> None:
                 print(f"TELEGRAM: falha ao enviar texto: {repr(e)}")
 
 
+import edge_tts  # Remova a linha "from gtts import gTTS" e coloque esta no topo
+
+# ... (restante do código) ...
+
 async def send_telegram_voice(chat_id: int, text_to_speak: str) -> None:
-    """Converte o texto da resposta em áudio de voz e envia ao Telegram."""
+    """Converte o texto da resposta em áudio com voz neural realista do Edge TTS."""
     if not TELEGRAM_BOT_TOKEN:
         return
 
     try:
-        tts = gTTS(text=text_to_speak, lang="pt", slow=False)
-        audio_fp = io.BytesIO()
-        tts.write_to_fp(audio_fp)
-        audio_fp.seek(0)
+        # Vozes em PT-BR disponíveis:
+        # "pt-BR-AntonioNeural" (Masculina - perfeita para o JARVIS)
+        # "pt-BR-FranciscaNeural" (Feminina)
+        VOICE = "pt-BR-AntonioNeural"
+
+        communicate = edge_tts.Communicate(text_to_speak, VOICE)
+        
+        # Gera o áudio na memória
+        audio_bytes = bytearray()
+        async for chunk in communicate.stream():
+            if chunk["type"] == "audio":
+                audio_bytes.extend(chunk["data"])
+
+        audio_fp = io.BytesIO(audio_bytes)
+        audio_fp.name = "voice.ogg"
 
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendVoice"
         files = {"voice": ("voice.ogg", audio_fp, "audio/ogg")}
@@ -243,6 +258,7 @@ async def send_telegram_voice(chat_id: int, text_to_speak: str) -> None:
 
         async with httpx.AsyncClient(timeout=30.0) as client:
             await client.post(url, data=data, files=files)
+            
     except Exception as e:
         print(f"TELEGRAM: falha ao enviar voz: {repr(e)}")
 
