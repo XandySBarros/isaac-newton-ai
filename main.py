@@ -3,9 +3,9 @@ import base64
 import io
 import os
 
+import edge_tts
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Request
-from gtts import gTTS
 
 app = FastAPI()
 
@@ -226,7 +226,7 @@ async def send_telegram_message(chat_id: int, text: str) -> None:
                 print(f"TELEGRAM: falha ao enviar texto: {repr(e)}")
 
 
-import edge_tts  # Remova a linha "from gtts import gTTS" e coloque esta no topo
+import edge_tts  # Remova a linha "from edge_tts import edge_tts" e coloque esta no topo
 
 # ... (restante do código) ...
 
