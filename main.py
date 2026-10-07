@@ -1,6 +1,5 @@
 import asyncio
 import os
-
 import httpx
 from fastapi import BackgroundTasks, FastAPI, Request
 
@@ -9,20 +8,16 @@ app = FastAPI()
 # ---------------------------------------------------------------------------
 # Configuração (variáveis de ambiente do Render)
 # ---------------------------------------------------------------------------
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
 
-# Ordem: modelos menos disputados primeiro, para evitar o erro 503.
+# Modelos oficiais e homologados da API do Google Gemini
 MODELS_TO_TRY = [
-    "gemini-3.5-flash",
-    "gemini-3.6-flash",
-    "gemini-3.5-flash-lite",
-    "gemini-3.7-flash",
-    "gemini-3.8-flash",
-    "gemini-flash-latest",
+    "gemini-1.5-flash",
+    "gemini-2.0-flash",
+    "gemini-1.5-pro"
 ]
 
-# Personalidade / regras do bot. Edite como quiser.
 SYSTEM_INSTRUCTION = (
     "Você é o JARVIS, um assistente pessoal inteligente que responde "
     "comandos e perguntas pelo Telegram. Responda sempre em português, "
@@ -31,17 +26,14 @@ SYSTEM_INSTRUCTION = (
 )
 
 # ---------------------------------------------------------------------------
-# Memória de conversa (em RAM: zera quando o Render reinicia)
+# Memória de conversa (em RAM)
 # ---------------------------------------------------------------------------
 MAX_HISTORY_MESSAGES = 20
 chat_histories: dict[int, list[dict]] = {}
-
-# Evita processar a mesma atualização do Telegram duas vezes
 processed_updates: set[int] = set()
 
 
 def get_gemini_contents(chat_id: int, prompt: str) -> list[dict]:
-    """Histórico da conversa + a nova mensagem do usuário."""
     history = chat_histories.get(chat_id, [])
     return history + [{"role": "user", "parts": [{"text": prompt}]}]
 
@@ -55,7 +47,7 @@ def save_to_history(chat_id: int, prompt: str, reply: str) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Gemini (com retry e fallback entre modelos)
+# Processamento com Gemini
 # ---------------------------------------------------------------------------
 async def process_with_jarvis(chat_id: int, prompt: str) -> str:
     if not GEMINI_API_KEY:
@@ -75,18 +67,15 @@ async def process_with_jarvis(chat_id: int, prompt: str) -> str:
 
     async with httpx.AsyncClient(timeout=45.0) as client:
         for model in MODELS_TO_TRY:
-            url = (
-                "https://generativelanguage.googleapis.com/"
-                f"v1beta/models/{model}:generateContent"
-            )
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
 
-            for _attempt in range(2):  # 2 tentativas por modelo
+            for _attempt in range(2):
                 try:
                     r = await client.post(url, json=payload, headers=headers)
                 except Exception as e:
                     print(f"JARVIS: {model} erro de rede: {repr(e)}")
                     last_status = "timeout"
-                    await asyncio.sleep(1.5)
+                    await asyncio.sleep(1.0)
                     continue
 
                 print(f"JARVIS: {model} -> HTTP {r.status_code}")
@@ -96,24 +85,22 @@ async def process_with_jarvis(chat_id: int, prompt: str) -> str:
                         parts = r.json()["candidates"][0]["content"]["parts"]
                         reply = "".join(p.get("text", "") for p in parts).strip()
                     except Exception:
-                        print(f"JARVIS: resposta inesperada: {r.text[:1000]}")
-                        break  # tenta o próximo modelo
+                        break
 
                     if not reply:
-                        print(f"JARVIS: resposta vazia: {r.text[:1000]}")
                         break
 
                     save_to_history(chat_id, prompt, reply)
                     return reply
 
                 last_status = r.status_code
-                print(f"JARVIS: {r.text[:500]}")
 
+                # Em caso de sobrecarga (503) ou limitação de taxa (429), tenta o próximo modelo real
                 if r.status_code in (429, 500, 503):
-                    await asyncio.sleep(1.5)  # congestionado: tenta de novo
+                    await asyncio.sleep(1.0)
                     continue
 
-                break  # 400/401/403/404: vai para o próximo modelo
+                break
 
     return (
         f"⚠️ Todos os modelos falharam (último erro: {last_status}). "
@@ -122,30 +109,24 @@ async def process_with_jarvis(chat_id: int, prompt: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Telegram
+# Integração com o Telegram
 # ---------------------------------------------------------------------------
 async def send_telegram_message(chat_id: int, text: str) -> None:
     if not TELEGRAM_BOT_TOKEN:
-        print("ERRO: TELEGRAM_BOT_TOKEN não configurado no Render.")
         return
 
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-
-    # O Telegram aceita no máximo 4096 caracteres por mensagem
     chunks = [text[i : i + 4000] for i in range(0, len(text), 4000)] or [""]
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         for chunk in chunks:
             try:
-                r = await client.post(url, json={"chat_id": chat_id, "text": chunk})
-                if r.status_code != 200:
-                    print(f"TELEGRAM: erro {r.status_code}: {r.text[:500]}")
+                await client.post(url, json={"chat_id": chat_id, "text": chunk})
             except Exception as e:
                 print(f"TELEGRAM: falha ao enviar: {repr(e)}")
 
 
 async def handle_update(update: dict) -> None:
-    """Processa uma mensagem em segundo plano."""
     try:
         message = update.get("message") or update.get("edited_message")
         if not message:
@@ -166,12 +147,11 @@ async def handle_update(update: dict) -> None:
             )
             return
 
-        if user_message.strip() == "/limpar":
+        if user_message.strip() in ["/limpar", "/reset"]:
             chat_histories.pop(chat_id, None)
             await send_telegram_message(chat_id, "Memória da conversa apagada. ✅")
             return
 
-        print(f"JARVIS: mensagem recebida de {chat_id}: {user_message[:200]}")
         reply = await process_with_jarvis(chat_id, user_message)
         await send_telegram_message(chat_id, reply)
 
@@ -184,7 +164,6 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
     update = await request.json()
     update_id = update.get("update_id")
 
-    # Telegram reenvia a mesma atualização se demorarmos a responder
     if update_id is not None:
         if update_id in processed_updates:
             return {"ok": True}
@@ -192,14 +171,10 @@ async def telegram_webhook(request: Request, background_tasks: BackgroundTasks):
         if len(processed_updates) > 1000:
             processed_updates.clear()
 
-    # Responde 200 imediatamente e processa em segundo plano
     background_tasks.add_task(handle_update, update)
     return {"ok": True}
 
 
-# ---------------------------------------------------------------------------
-# Health check (Render / UptimeRobot)
-# ---------------------------------------------------------------------------
 @app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     return {"status": "JARVIS online"}
