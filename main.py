@@ -43,12 +43,21 @@ def clear_history(chat_id: int):
         conversation_history[chat_id] = []
 
 async def process_with_jarvis(chat_id: int, prompt: str) -> str:
+
+    print("========================================")
+    print("JARVIS: iniciando chamada ao Gemini")
+    print(f"API KEY configurada: {bool(GEMINI_API_KEY)}")
+    print(f"Tamanho da API KEY: {len(GEMINI_API_KEY)}")
+    print(f"Mensagem recebida: {prompt}")
+    print("========================================")
+
     if not GEMINI_API_KEY:
-        return "⚠️ Erro: a variável GEMINI_API_KEY não foi configurada no Render."
+        print("ERRO: GEMINI_API_KEY NÃO CONFIGURADA")
+        return "⚠️ A GEMINI_API_KEY não está configurada no Render."
 
     contents = get_gemini_contents(chat_id, prompt)
 
-    model_name = "gemini-3.6-flash"
+    model_name = "gemini-3.8-flash"
 
     url = (
         f"https://generativelanguage.googleapis.com/"
@@ -72,7 +81,12 @@ async def process_with_jarvis(chat_id: int, prompt: str) -> str:
     }
 
     try:
+
+        print(f"JARVIS: chamando modelo {model_name}")
+        print(f"JARVIS: URL = {url}")
+
         async with httpx.AsyncClient() as http_client:
+
             response = await http_client.post(
                 url,
                 json=payload,
@@ -80,15 +94,19 @@ async def process_with_jarvis(chat_id: int, prompt: str) -> str:
                 timeout=60.0
             )
 
-        print(f"Gemini HTTP {response.status_code}")
+        print(f"JARVIS: Gemini respondeu HTTP {response.status_code}")
+        print(f"JARVIS: resposta = {response.text[:2000]}")
 
         if response.status_code == 200:
+
             data = response.json()
 
             bot_reply = (
                 data["candidates"][0]
                 ["content"]["parts"][0]["text"]
             )
+
+            print("JARVIS: resposta recebida com sucesso!")
 
             save_to_history(
                 chat_id,
@@ -98,23 +116,23 @@ async def process_with_jarvis(chat_id: int, prompt: str) -> str:
 
             return bot_reply
 
-        else:
-            print("Resposta do Gemini:")
-            print(response.text)
-
-            return (
-                f"⚠️ Gemini retornou erro HTTP "
-                f"{response.status_code}."
-            )
-
-    except Exception as e:
-        print(f"Erro ao chamar o Gemini: {e}")
-
         return (
-            "⚠️ Não consegui me comunicar com o Gemini. "
-            "Verifique os logs do Render."
+            f"⚠️ Gemini retornou HTTP "
+            f"{response.status_code}.\n\n"
+            f"Veja os detalhes no log do Render."
         )
 
+    except Exception as e:
+
+        print("========================================")
+        print("ERRO AO CHAMAR GEMINI")
+        print(repr(e))
+        print("========================================")
+
+        return (
+            "⚠️ Erro ao se comunicar com o Gemini. "
+            "Veja o log do Render."
+        )
 @app.get("/")
 def home():
     return {"status": "JARVIS está online e operacional!"}
