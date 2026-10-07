@@ -57,7 +57,14 @@ async def process_with_jarvis(chat_id: int, prompt: str) -> str:
 
     contents = get_gemini_contents(chat_id, prompt)
 
-    model_name = "gemini-3.7-flash"
+    MODELS_TO_TRY = [
+    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.7-flash",
+    "gemini-3.8-flash",
+    "gemini-flash-latest",
+]
 
     url = (
         f"https://generativelanguage.googleapis.com/"
