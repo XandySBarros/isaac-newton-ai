@@ -44,46 +44,76 @@ def clear_history(chat_id: int):
 
 async def process_with_jarvis(chat_id: int, prompt: str) -> str:
     if not GEMINI_API_KEY:
-        return "⚠️ Erro: A variável GEMINI_API_KEY não foi configurada no Render."
+        return "⚠️ Erro: a variável GEMINI_API_KEY não foi configurada no Render."
 
     contents = get_gemini_contents(chat_id, prompt)
-    
-    # Lista de modelos para tentar em ordem de preferência
-    models_to_try = [
-        "gemini-2.5-flash",
-        "gemini-2.0-flash",
-        "gemini-1.5-flash-latest"
-    ]
-    
-    headers = {"Content-Type": "application/json"}
-    
-    async with httpx.AsyncClient() as http_client:
-        for model_name in models_to_try:
-            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model_name}:generateContent?key={GEMINI_API_KEY}"
-            
-            payload = {
-                "contents": contents,
-                "systemInstruction": {
-                    "parts": [{"text": SYSTEM_INSTRUCTION}]
-                },
-                "generationConfig": {
-                    "temperature": 0.7
+
+    model_name = "gemini-3.6-flash"
+
+    url = (
+        f"https://generativelanguage.googleapis.com/"
+        f"v1beta/models/{model_name}:generateContent"
+    )
+
+    headers = {
+        "Content-Type": "application/json",
+        "x-goog-api-key": GEMINI_API_KEY
+    }
+
+    payload = {
+        "contents": contents,
+        "systemInstruction": {
+            "parts": [
+                {
+                    "text": SYSTEM_INSTRUCTION
                 }
-            }
-            
-            try:
-                response = await http_client.post(url, json=payload, headers=headers, timeout=30.0)
-                if response.status_code == 200:
-                    data = response.json()
-                    bot_reply = data["candidates"][0]["content"]["parts"][0]["text"]
-                    save_to_history(chat_id, prompt, bot_reply)
-                    return bot_reply
-                else:
-                    print(f"Tentativa com {model_name} retornou status {response.status_code}")
-            except Exception as e:
-                print(f"Erro ao tentar o modelo {model_name}: {e}")
-                
-        return "⚠️ Erro ao se comunicar com a API do Gemini. Verifique se a sua GEMINI_API_KEY está correta no Render."
+            ]
+        }
+    }
+
+    try:
+        async with httpx.AsyncClient() as http_client:
+            response = await http_client.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=60.0
+            )
+
+        print(f"Gemini HTTP {response.status_code}")
+
+        if response.status_code == 200:
+            data = response.json()
+
+            bot_reply = (
+                data["candidates"][0]
+                ["content"]["parts"][0]["text"]
+            )
+
+            save_to_history(
+                chat_id,
+                prompt,
+                bot_reply
+            )
+
+            return bot_reply
+
+        else:
+            print("Resposta do Gemini:")
+            print(response.text)
+
+            return (
+                f"⚠️ Gemini retornou erro HTTP "
+                f"{response.status_code}."
+            )
+
+    except Exception as e:
+        print(f"Erro ao chamar o Gemini: {e}")
+
+        return (
+            "⚠️ Não consegui me comunicar com o Gemini. "
+            "Verifique os logs do Render."
+        )
 
 @app.get("/")
 def home():
