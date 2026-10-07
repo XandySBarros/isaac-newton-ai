@@ -322,7 +322,7 @@ async def handle_update(update: dict) -> None:
             await send_telegram_message(chat_id, reply)
             return
 
-        # 3. Processar Mensagens de Voz / Áudio
+       # 3. Processar Mensagens de Voz / Áudio -> Responde SOMENTE por voz
         if voice_info:
             file_id = voice_info.get("file_id")
             mime_type = voice_info.get("mime_type", "audio/ogg")
@@ -346,15 +346,18 @@ async def handle_update(update: dict) -> None:
 
             history_prompt = "[Áudio do usuário]"
             reply = await process_with_jarvis(chat_id, user_parts, history_prompt)
-            await send_telegram_message(chat_id, reply)
+            
+            # Chama APENAS o áudio de voz:
             await send_telegram_voice(chat_id, reply)
             return
 
-        # 4. Processar Texto Normal
+        # 4. Processar Texto Normal -> Responde SOMENTE em texto
         if user_message:
             print(f"JARVIS: mensagem recebida de {chat_id}: {user_message[:200]}")
             user_parts = [{"text": user_message}]
             reply = await process_with_jarvis(chat_id, user_parts, user_message)
+            
+            # Chama APENAS a mensagem de texto:
             await send_telegram_message(chat_id, reply)
             return
 
